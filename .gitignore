@@ -1,0 +1,31 @@
+# Claude Code
+.claude/
+
+# Fichiers temporaires
+*.tmp
+*.temp
+*.log
+
+# Fichiers de test locaux
+test_*.ps1
+test_*.html
+*.html
+
+# Fichiers sensibles
+.env
+*.key
+credentials.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node modules (si utilisé)
+node_modules/

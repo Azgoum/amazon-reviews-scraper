@@ -1,0 +1,147 @@
+{
+  "id": "Jl8qD1CMR9p2kwUH",
+  "name": "Amazon Reviews Scraper - POC",
+  "active": true,
+  "createdAt": "2026-02-01T09:42:34.536Z",
+  "updatedAt": "2026-02-05T14:09:58.695Z",
+  "versionId": "c2c060be-08f4-479e-9e4c-2333136062ca",
+  "nodes": [
+    {
+      "id": "form-trigger",
+      "name": "Formulaire Upload",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [260, 300],
+      "parameters": {
+        "formTitle": "Amazon Reviews Analyzer",
+        "formDescription": "Uploadez le fichier .txt contenant le code source HTML de la page des avis Amazon.<br><br><b>Comment obtenir le HTML :</b><br>1. Ouvrez la page des avis Amazon<br>2. Ctrl+U pour voir le code source<br>3. Ctrl+A puis Ctrl+C pour copier<br>4. Collez dans un fichier .txt",
+        "responseMode": "lastNode",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Fichier HTML Amazon",
+              "fieldType": "file",
+              "requiredField": true,
+              "acceptFileTypes": ".txt,.html",
+              "multipleFiles": false
+            },
+            {
+              "fieldLabel": "URL du produit (optionnel)",
+              "fieldType": "text",
+              "requiredField": false,
+              "placeholder": "https://www.amazon.fr/product-reviews/..."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "extract-product-url",
+      "name": "Préparer données",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "parameters": {
+        "jsCode": "// Extraire le HTML du fichier uploadé\nconst formData = $input.first().json;\n\n// Le fichier est dans formData['Fichier HTML Amazon']\nconst fileData = formData['Fichier HTML Amazon'];\nlet html = '';\n\nif (fileData && fileData.data) {\n  // Le contenu du fichier est en base64\n  html = Buffer.from(fileData.data, 'base64').toString('utf-8');\n} else if (typeof fileData === 'string') {\n  html = fileData;\n}\n\nconst productUrl = formData['URL du produit (optionnel)'] || '';\n\n// Extraire l'ASIN si URL fournie\nlet asin = '';\nif (productUrl) {\n  const asinMatch = productUrl.match(/\\/(?:dp|product|gp\\/product|product-reviews)\\/([A-Z0-9]{10})/);\n  if (asinMatch) {\n    asin = asinMatch[1];\n  }\n}\n\nreturn [{\n  json: {\n    mode: 'direct_html',\n    html: html,\n    reviewsUrl: productUrl,\n    asin: asin,\n    timestamp: new Date().toISOString(),\n    file_size: html.length\n  }\n}];"
+      }
+    },
+    {
+      "id": "parse-reviews-bs4",
+      "name": "Parser Avis JS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Parser d'avis Amazon en JavaScript - Version 3\nconst inputData = $input.first().json;\nlet html = '';\n\n// Détecter la source du HTML\nif (inputData.html) {\n  html = inputData.html;\n} else if (inputData.data) {\n  html = inputData.data;\n} else {\n  html = '';\n}\n\nconst reviews = [];\n\nif (html.length > 0) {\n  // Méthode 1: Chercher les profils (auteurs) comme ancre\n  const authors = [];\n  const authorRegex = /class=\"a-profile-name\">([^<]+)<\\/span>/g;\n  let m;\n  while ((m = authorRegex.exec(html)) !== null) {\n    authors.push(m[1].trim());\n  }\n  \n  // Méthode 2: Chercher les notes (X,X sur 5)\n  const ratings = [];\n  const ratingRegex = /a-icon-alt\">([\\d,\\.]+)\\s*sur\\s*5/g;\n  while ((m = ratingRegex.exec(html)) !== null) {\n    const val = m[1].replace(',', '.');\n    ratings.push(parseFloat(val));\n  }\n  \n  // Méthode 3: Chercher les titres (dans review-title-content > span)\n  const titles = [];\n  const titleRegex = /review-title-content[^>]*a-text-bold[^>]*>[\\s\\S]*?<span>([^<]+)<\\/span>/g;\n  while ((m = titleRegex.exec(html)) !== null) {\n    titles.push(m[1].trim());\n  }\n  \n  // Méthode 4: Chercher les dates\n  const dates = [];\n  const dateRegex = /data-hook=\"review-date\"[^>]*>([^<]+)</g;\n  while ((m = dateRegex.exec(html)) !== null) {\n    dates.push(m[1].trim());\n  }\n  \n  // Méthode 5: Chercher les textes des avis\n  const bodies = [];\n  const bodyRegex = /review-text-content\">\\s*<span>([\\s\\S]*?)<\\/span>/g;\n  while ((m = bodyRegex.exec(html)) !== null) {\n    let text = m[1]\n      .replace(/<br\\s*\\/?>/gi, ' ')\n      .replace(/<[^>]+>/g, '')\n      .replace(/&nbsp;/g, ' ')\n      .replace(/&amp;/g, '&')\n      .replace(/&#39;/g, \"'\")\n      .replace(/&quot;/g, '\"')\n      .replace(/\\s+/g, ' ')\n      .trim();\n    if (text.length > 5) {\n      bodies.push(text);\n    }\n  }\n  \n  // Construire les avis en alignant les données\n  const count = Math.max(authors.length, titles.length, bodies.length);\n  for (let i = 0; i < count; i++) {\n    reviews.push({\n      title: titles[i] || '',\n      rating: ratings[i] || 0,\n      text: bodies[i] || '',\n      date: dates[i] || '',\n      author: authors[i] || 'Anonyme',\n      verified: true\n    });\n  }\n}\n\nreturn [{\n  json: {\n    reviews_count: reviews.length,\n    reviews: reviews,\n    scraped_at: new Date().toISOString(),\n    html_length: html.length,\n    source: inputData.mode || 'unknown'\n  }\n}];"
+      }
+    },
+    {
+      "id": "format-json",
+      "name": "Formater JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 300],
+      "parameters": {
+        "jsCode": "// Formater les données en JSON propre\nconst inputData = $input.first().json;\n\n// Structure JSON finale\nconst formattedData = {\n  product: {\n    url: inputData.product_url || '',\n    asin: inputData.asin || '',\n    reviews_url: inputData.reviews_url || ''\n  },\n  metadata: {\n    scraped_at: inputData.scraped_at || new Date().toISOString(),\n    total_reviews: inputData.reviews_count || 0\n  },\n  reviews: (inputData.reviews || []).map(review => ({\n    title: review.title || '',\n    rating: review.rating || 0,\n    rating_text: review.rating_text || '',\n    author: review.author || 'Anonyme',\n    date: review.date || '',\n    text: review.text || '',\n    verified_purchase: review.verified_purchase || false,\n    helpful_count: review.helpful_count || 0\n  }))\n};\n\nreturn [{\n  json: formattedData\n}];"
+      }
+    },
+    {
+      "id": "openai-synthesis",
+      "name": "Synthèse OpenAI",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [1220, 300],
+      "parameters": {
+        "resource": "text",
+        "operation": "response",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "gpt-4o-mini",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "responses": {
+          "values": [
+            {
+              "type": "text",
+              "role": "system",
+              "content": "Tu es un expert en analyse de produits. Tu reçois des avis clients Amazon et tu dois produire une synthèse structurée en français.\n\nFormat de sortie JSON:\n{\n  \"note_moyenne\": number,\n  \"nombre_avis\": number,\n  \"points_positifs\": [\"...\"],\n  \"points_negatifs\": [\"...\"],\n  \"resume\": \"Un paragraphe de synthèse globale\",\n  \"recommandation\": \"Acheter / À éviter / Mitigé\"\n}"
+            },
+            {
+              "type": "text",
+              "role": "user",
+              "content": "={{ 'Voici les avis clients à analyser:\\n\\n' + JSON.stringify($json.reviews, null, 2) }}"
+            }
+          ]
+        },
+        "simplify": true,
+        "options": {
+          "maxTokens": 1000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "<CREDENTIAL_ID>",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "id": "form-response",
+      "name": "Page Résultat",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1460, 300],
+      "parameters": {
+        "operation": "completion",
+        "title": "Analyse terminée",
+        "message": "=## Résultat de l'analyse\\n\\n**Note moyenne:** {{ $json.output[0].content.note_moyenne }}/5\\n\\n**Nombre d'avis analysés:** {{ $json.output[0].content.nombre_avis }}\\n\\n### Points positifs\\n{{ $json.output[0].content.points_positifs.join('\\n- ') }}\\n\\n### Points négatifs\\n{{ $json.output[0].content.points_negatifs.join('\\n- ') }}\\n\\n### Résumé\\n{{ $json.output[0].content.resume }}\\n\\n### Recommandation\\n**{{ $json.output[0].content.recommandation }}**"
+      }
+    }
+  ],
+  "connections": {
+    "Formulaire Upload": {
+      "main": [[{ "node": "Préparer données", "type": "main", "index": 0 }]]
+    },
+    "Préparer données": {
+      "main": [[{ "node": "Parser Avis JS", "type": "main", "index": 0 }]]
+    },
+    "Parser Avis JS": {
+      "main": [[{ "node": "Formater JSON", "type": "main", "index": 0 }]]
+    },
+    "Formater JSON": {
+      "main": [[{ "node": "Synthèse OpenAI", "type": "main", "index": 0 }]]
+    },
+    "Synthèse OpenAI": {
+      "main": [[{ "node": "Page Résultat", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true
+  }
+}
